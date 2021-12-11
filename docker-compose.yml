@@ -1,0 +1,18 @@
+version: '3'
+
+volumes:
+  postgresql-9:
+    name: postgresql-9
+
+services:
+  postgres:
+    image: postgres:9.6-alpine
+    container_name: postgres9
+    restart: always
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    volumes:
+      - postgresql-9:/var/lib/postgresql/data
+    ports:
+      - 5432:5432
