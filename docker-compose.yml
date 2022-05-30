@@ -5,6 +5,8 @@ volumes:
     name: postgresql-9
   postgresql-12:
     name: postgresql-12
+  postgresql-14:
+    name: postgresql-14
 
 services:
   pg9:
@@ -28,3 +30,14 @@ services:
       - POSTGRES_PASSWORD=postgres
     volumes:
       - postgresql-12:/var/lib/postgresql/data
+
+  pg14:
+    image: postgres:14-alpine
+    container_name: pg14
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      - POSTGRES_USER=postgres
+      - POSTGRES_PASSWORD=postgres
+    volumes:
+      - postgresql-14:/var/lib/postgresql/data
