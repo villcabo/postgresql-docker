@@ -1,2 +1,5 @@
 .idea/
 .vscode/
+
+*.env
+/conf.d/*.conf

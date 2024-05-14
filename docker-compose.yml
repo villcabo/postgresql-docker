@@ -1,46 +1,14 @@
 version: '3.5'
 
-volumes:
-  postgresql-9:
-    name: postgresql-9
-  postgresql-12:
-    name: postgresql-12
-  postgresql-14:
-    name: postgresql-14
-
 services:
-  pg9:
-    image: postgres:9-alpine
-    container_name: pg9
+  postgres:
+    image: postgres:${PG_VERSION:-alpine}
+    container_name: postgresql
     restart: unless-stopped
     ports:
-      - "0.0.0.0:5432:5432"
-    environment:
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
+      - ${PG_PORT:-127.0.0.1:5432}:5432
     volumes:
-      - postgresql-9:/var/lib/postgresql/data
-
-  pg12:
-    image: postgres:12-alpine
-    container_name: pg12
-    restart: unless-stopped
-    ports:
-      - "0.0.0.0:5432:5432"
+      - ./postgresql-data:/var/lib/postgresql/data
     environment:
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
-    volumes:
-      - postgresql-12:/var/lib/postgresql/data
-
-  pg14:
-    image: postgres:14-alpine
-    container_name: pg14
-    restart: unless-stopped
-    ports:
-      - "0.0.0.0:5432:5432"
-    environment:
-      - POSTGRES_USER=postgres
-      - POSTGRES_PASSWORD=postgres
-    volumes:
-      - postgresql-14:/var/lib/postgresql/data
+      POSTGRES_USER: ${PG_USER:-postgres}
+      POSTGRES_PASSWORD: ${PG_PASS:-postgres}
