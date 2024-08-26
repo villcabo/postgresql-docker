@@ -1,14 +1,13 @@
-version: '3.5'
-
+name: postgresql
 services:
   postgres:
-    image: postgres:${PG_VERSION:-alpine}
+    image: postgres:${POSTGRES_VERSION:-16-alpine}
     container_name: postgresql
     restart: unless-stopped
     ports:
-      - ${PG_PORT:-127.0.0.1:5432}:5432
+      - ${POSTGRES_PORT:-127.0.0.1:5432}:5432
     volumes:
       - ./postgresql-data:/var/lib/postgresql/data
     environment:
-      POSTGRES_USER: ${PG_USER:-postgres}
-      POSTGRES_PASSWORD: ${PG_PASS:-postgres}
+      POSTGRES_USER: ${POSTGRES_USERNAME:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
