@@ -1,4 +1,5 @@
 name: postgresql
+
 services:
   postgres:
     image: postgres:${POSTGRES_VERSION:-16-alpine}
@@ -11,3 +12,5 @@ services:
     environment:
       POSTGRES_USER: ${POSTGRES_USERNAME:-postgres}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-postgres}
+    command:
+      -c max_connections=200
