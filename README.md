@@ -10,6 +10,7 @@ options, labels, backups, and migrations.
 - [Layout](#layout)
 - [Quick start](#quick-start)
 - [Environment variables](#environment-variables)
+- [Syncing `.env` with `.env.example`](#syncing-env-with-envexample)
 - [Network (manual creation)](#network-manual-creation)
 - [Data volume (manual creation)](#data-volume-manual-creation)
 - [PostgreSQL version and data layout](#postgresql-version-and-data-layout)
@@ -89,6 +90,33 @@ reference with comments.
 Hardcoded in `docker-compose.yml` (edit the file if you need them different):
 `container_name=postgres`, `hostname=postgres`, `restart=unless-stopped`,
 data mount target `/var/lib/postgresql`.
+
+## Syncing `.env` with `.env.example`
+
+When `.env.example` gains new variables (pulled from upstream), run
+`./sync-env.sh` to merge them into your existing `.env` **without losing
+the values you already set**.
+
+```bash
+./sync-env.sh              # interactive: shows a unified diff, asks to confirm
+./sync-env.sh -n           # dry-run: shows the diff and exits, never writes
+./sync-env.sh -y           # non-interactive: apply without asking (CI / scripts)
+./sync-env.sh -y PATH_TO_EXAMPLE PATH_TO_ENV   # custom paths
+```
+
+What it does:
+
+- Rebuilds `.env` using the structure, order and comments of `.env.example`.
+- Keeps the value of every key you already have uncommented in `.env`.
+- Adds every new key from the example (commented, with its default).
+- Preserves keys that exist only in your `.env` (custom or legacy) in a
+  "Legacy / custom" section at the bottom — nothing is silently lost.
+- **Shows a unified diff + a summary** (preserved / added / orphan counts)
+  **before writing anything** and waits for `[y/N]` confirmation.
+- Refuses to apply non-interactively unless `-y` is given.
+- Writes a timestamped backup `.env.bak.YYYYMMDD-HHMMSS` before overwriting
+  `.env` (so older backups are never clobbered).
+- Exits with "no changes" if `.env` is already in sync.
 
 ## Network (manual creation)
 
