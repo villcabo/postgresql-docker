@@ -1,8 +1,8 @@
 # PostgreSQL Docker
 
 Parameterized PostgreSQL stack. Network and data volume are **external** —
-you create them manually — so you keep full control over MTU, driver options,
-labels, backups, and migrations.
+you create them manually — so you keep full control over MTU, driver
+options, labels, backups, and migrations.
 
 ## Table of contents
 
@@ -12,8 +12,8 @@ labels, backups, and migrations.
 - [Environment variables](#environment-variables)
 - [Network (manual creation)](#network-manual-creation)
 - [Data volume (manual creation)](#data-volume-manual-creation)
-- [PostgreSQL version and mount path](#postgresql-version-and-mount-path)
-- [Configuration (`custom.conf`)](#configuration-customconf)
+- [PostgreSQL version and data layout](#postgresql-version-and-data-layout)
+- [Tuning (`POSTGRES_COMMAND` + pgtune)](#tuning-postgres_command--pgtune)
 - [Logs](#logs)
 - [Operations](#operations)
 - [Upgrading between major versions](#upgrading-between-major-versions)
@@ -22,11 +22,11 @@ labels, backups, and migrations.
 
 ## Features
 
-- Single-file `docker-compose.yml`, fully parameterized via `.env`.
+- Single-file `docker-compose.yml`, parameterized via `.env`.
 - External network (you set MTU, driver, subnet, labels).
 - External named volume for data (portable, inspectable, easy to back up).
 - Bind-mounted host directory for logs (tail from host).
-- Bind-mounted `custom.conf`, read-only.
+- Runtime tuning via a single `POSTGRES_COMMAND` variable (pgtune-friendly).
 - Healthcheck via `pg_isready`.
 - Works with any `postgres` image tag (PG 12 → 18+).
 
@@ -37,17 +37,15 @@ labels, backups, and migrations.
 ├── docker-compose.yml   # Parameterized stack (single service)
 ├── .env.example         # Template — copy to .env
 ├── .env                 # Your local config (gitignored)
-├── custom.conf          # Custom postgresql.conf
-├── logs/                # PG log files (created on first run)
+├── logs/                # PG log files (created on first run, only if enabled)
 └── README.md
 ```
 
 ## Quick start
 
 ```bash
-# 1. Copy env template and edit values
+# 1. Copy env template (everything commented — defaults kick in)
 cp .env.example .env
-$EDITOR .env
 
 # 2. Create the external network (adjust MTU to your needs)
 docker network create \
@@ -58,43 +56,44 @@ docker network create \
 # 3. Create the external data volume
 docker volume create postgres_data
 
-# 4. (Optional) prepare the logs directory
-mkdir -p logs
-
-# 5. Start
+# 4. Start
 docker compose up -d
 
-# 6. Follow logs
+# 5. Follow logs
 docker compose logs -f postgres
 ```
 
 ## Environment variables
 
-All variables live in `.env`. See `.env.example` for documented defaults.
+All variables live in `.env` (copy from `.env.example`). Every one is
+optional — defaults apply when unset. See `.env.example` for the full
+reference with comments.
 
-| Variable | Purpose | Example |
+| Variable | Default | Purpose |
 |---|---|---|
-| `COMPOSE_PROJECT_NAME` | Project name in `docker compose ls` | `postgres` |
-| `CONTAINER_NAME` | Container and hostname | `postgres18` |
-| `POSTGRES_VERSION` | Image tag | `18-alpine`, `17-alpine`, `16-alpine` |
-| `POSTGRES_DATA_TARGET` | Mount path inside container (version dependent) | `/var/lib/postgresql` (PG 18+) or `/var/lib/postgresql/data` (PG ≤17) |
-| `POSTGRES_USER` / `POSTGRES_PASSWORD` / `POSTGRES_DB` | Superuser + initial DB (applied on first boot) | `postgres` |
-| `POSTGRES_INITDB_ARGS` | Extra `initdb` flags (first boot only) | `--encoding=UTF8 --locale=C` |
-| `POSTGRES_BIND_HOST` | Host IP to publish on | `127.0.0.1` local, `0.0.0.0` LAN |
-| `POSTGRES_PORT` | Host port | `5432` |
-| `POSTGRES_NETWORK` | Name of the external docker network | `postgres_net` |
-| `POSTGRES_DATA_VOLUME` | Name of the external docker volume | `postgres_data` |
-| `POSTGRES_LOGS_DIR` | Host directory for logs | `./logs` |
-| `POSTGRES_CONFIG_FILE` | Path to the custom `postgresql.conf` | `./custom.conf` |
-| `SHM_SIZE` | `/dev/shm` size for the container | `1gb` |
-| `RESTART_POLICY` | Docker restart policy | `unless-stopped` |
-| `STOP_GRACE_PERIOD` | Time before SIGKILL on stop | `1m` |
-| `TZ` | Timezone | `UTC`, `America/La_Paz` |
+| `POSTGRES_VERSION` | `18-alpine` | Image tag |
+| `POSTGRES_USER` | `postgres` | Superuser (first-boot only) |
+| `POSTGRES_PASSWORD` | `postgres` | Superuser password (first-boot only) |
+| `POSTGRES_DB` | `postgres` | Default DB (first-boot only) |
+| `POSTGRES_INITDB_ARGS` | *(empty)* | Extra `initdb` flags (first-boot only) |
+| `POSTGRES_BIND_HOST` | `127.0.0.1` | Host interface to publish on |
+| `POSTGRES_PORT` | `5432` | Host port |
+| `POSTGRES_NETWORK` | `postgres_net` | External docker network name |
+| `POSTGRES_DATA_VOLUME` | `postgres_data` | External docker volume name |
+| `POSTGRES_LOGS_DIR` | `./logs` | Host dir for log files |
+| `POSTGRES_COMMAND` | *(empty)* | Extra `-c key=value` flags for runtime tuning |
+| `SHM_SIZE` | `256mb` | `/dev/shm` size for the container |
+| `STOP_GRACE_PERIOD` | `1m` | Seconds before SIGKILL on stop |
+| `TZ` | `UTC` | Time zone |
+
+Hardcoded in `docker-compose.yml` (edit the file if you need them different):
+`container_name=postgres`, `hostname=postgres`, `restart=unless-stopped`,
+data mount target `/var/lib/postgresql`.
 
 ## Network (manual creation)
 
 The compose file declares the network as `external: true`. Create it before
-`up`, adjusting the options to your environment.
+`up`, adjusting options to your environment.
 
 ```bash
 # Basic
@@ -122,13 +121,12 @@ docker network inspect postgres_net
 docker network rm postgres_net   # stop the stack first
 ```
 
-If you need to change MTU later, you must recreate the network (Docker doesn't
-allow in-place MTU changes): `docker compose down`, remove and recreate the
-network, `docker compose up -d`.
+Docker does NOT allow in-place MTU changes — to change it, stop the stack,
+remove and recreate the network, then `docker compose up -d`.
 
 ## Data volume (manual creation)
 
-The data volume is also external. Create it manually:
+The data volume is external. Create it manually:
 
 ```bash
 # Default local driver
@@ -157,45 +155,80 @@ docker volume ls
 ```
 
 **Why external?** You stay in control of lifecycle. `docker compose down -v`
-cannot wipe the volume. You can move the volume between projects, attach
-backup sidecars, or swap drivers without touching the compose file.
+cannot wipe it. You can move the volume between projects, attach backup
+sidecars, or swap drivers without touching the compose file.
 
-## PostgreSQL version and mount path
+## PostgreSQL version and data layout
 
 PG 18 changed the Docker image's data layout:
 
-| Version | Mount path inside container | Why |
-|---|---|---|
-| PG 18+ | `/var/lib/postgresql` | New layout — data lives in `/var/lib/postgresql/<MAJOR>/docker` subdirectories to support `pg_upgrade --link` across major versions on a single mount. |
-| PG ≤17 | `/var/lib/postgresql/data` | Legacy layout — `PGDATA` directly at the mount point. |
+| Version | Mount target (inside container) |
+|---|---|
+| PG 18+ | `/var/lib/postgresql` *(what this compose uses)* |
+| PG ≤17 | `/var/lib/postgresql/data` |
 
-Set `POSTGRES_DATA_TARGET` accordingly. An existing volume initialized for one
-layout **cannot** be reused by the other — see
+`docker-compose.yml` hardcodes the PG 18+ target. If you need to run PG 17
+or older, edit `docker-compose.yml` and change:
+
+```yaml
+- postgres_data:/var/lib/postgresql
+```
+
+to:
+
+```yaml
+- postgres_data:/var/lib/postgresql/data
+```
+
+A volume initialized for one layout **cannot** be reused by the other — see
 [Upgrading between major versions](#upgrading-between-major-versions).
 
-## Configuration (`custom.conf`)
+## Tuning (`POSTGRES_COMMAND` + pgtune)
 
-The file `./custom.conf` is bind-mounted read-only at
-`/etc/postgresql/postgresql.conf` and loaded via `-c config_file=...`.
+All runtime tuning goes through `POSTGRES_COMMAND`. It's passed verbatim to
+the `postgres` binary as extra arguments.
 
-Tune it with [pgtune](https://pgtune.leopard.in.ua/) or by hand. Reload after
-changes:
+Generate values with [pgtune](https://pgtune.leopard.in.ua/) and paste them
+into `.env`:
 
 ```bash
-# Reload most parameters without restart
-docker compose exec postgres psql -U "$POSTGRES_USER" -c "SELECT pg_reload_conf();"
+POSTGRES_COMMAND="-c max_connections=200 -c shared_buffers=2GB -c effective_cache_size=6GB -c maintenance_work_mem=512MB -c checkpoint_completion_target=0.9 -c wal_buffers=16MB -c default_statistics_target=100 -c random_page_cost=1.1 -c effective_io_concurrency=200 -c work_mem=2621kB -c huge_pages=off -c min_wal_size=1GB -c max_wal_size=4GB -c max_worker_processes=4 -c max_parallel_workers_per_gather=2 -c max_parallel_workers=4 -c max_parallel_maintenance_workers=2"
+```
 
-# For parameters that require restart (shared_buffers, max_connections, etc.)
+To reload most settings without a restart:
+
+```bash
+docker compose exec postgres psql -U "$POSTGRES_USER" -c "SELECT pg_reload_conf();"
+```
+
+Parameters that require a restart (`shared_buffers`, `max_connections`, …):
+
+```bash
 docker compose restart postgres
 ```
 
 ## Logs
 
-Logs go to `./logs/` on the host via `logging_collector=on`. Files rotate
-daily as `postgresql-YYYY-MM-DD.log`.
+By default PG writes to stdout/stderr, which you read with
+`docker compose logs -f postgres`.
+
+To write rotated files to `./logs` on the host, append logging flags to
+`POSTGRES_COMMAND`:
 
 ```bash
-ls logs/
+-c logging_collector=on \
+-c log_directory=/var/log/postgresql \
+-c log_filename=postgresql-%Y-%m-%d.log \
+-c log_rotation_age=1d \
+-c log_rotation_size=0
+```
+
+Then:
+
+```bash
+mkdir -p logs
+sudo chown -R 70:70 logs   # alpine postgres UID
+docker compose up -d
 tail -f logs/postgresql-$(date +%F).log
 ```
 
@@ -227,31 +260,30 @@ docker compose up -d
 ## Upgrading between major versions
 
 `pg_upgrade` requires both old and new binaries and a layout switch between
-PG 17 and PG 18. The simplest and safest approach is **dump and restore**.
+PG 17 and PG 18. Simplest and safest: **dump and restore**.
 
 ```bash
 # 1. Dump from the old running instance
 docker compose exec postgres pg_dumpall -U "$POSTGRES_USER" > dump.sql
 
-# 2. Stop and remove the old data
+# 2. Stop and wipe the old data volume
 docker compose down
 docker volume rm postgres_data
 docker volume create postgres_data
 
-# 3. Switch version and mount target in .env
+# 3. Bump the version in .env
 #    POSTGRES_VERSION=18-alpine
-#    POSTGRES_DATA_TARGET=/var/lib/postgresql
+# (and edit the mount target in docker-compose.yml if moving from PG <=17)
 
 # 4. Boot the new version (creates empty cluster)
 docker compose up -d
-# Wait until healthy
 until docker compose exec -T postgres pg_isready -U "$POSTGRES_USER"; do sleep 1; done
 
 # 5. Restore
 cat dump.sql | docker compose exec -T postgres psql -U "$POSTGRES_USER" -d postgres
 ```
 
-For in-place `pg_upgrade --link`, see the upstream image docs:
+For in-place `pg_upgrade --link`, see upstream docs:
 <https://github.com/docker-library/postgres/issues/37>.
 
 ## Backups
@@ -276,8 +308,8 @@ docker compose start postgres
 
 **`Error: in 18+, these Docker images are configured to store database data…`**
 You're running PG 18+ against a volume initialized under the legacy layout
-(PG ≤17). Options: (a) go back to `POSTGRES_VERSION=17-alpine` and
-`POSTGRES_DATA_TARGET=/var/lib/postgresql/data`; or (b) dump + fresh volume
+(PG ≤17). Either go back to PG 17 (and change the mount target in
+`docker-compose.yml` to `/var/lib/postgresql/data`), or dump + fresh volume
 — see [Upgrading](#upgrading-between-major-versions).
 
 **`network postgres_net declared as external, but could not be found`**
@@ -292,8 +324,8 @@ Large clusters take longer to start. Increase `start_period` in
 
 **Permission denied on `./logs`**
 The container writes as the `postgres` user (UID 70 on alpine). Fix:
-`sudo chown -R 70:70 ./logs` or pick a directory you own with group access.
+`sudo chown -R 70:70 ./logs`.
 
 **Connection refused from another container**
 Attach that container to the same `postgres_net` network and use
-`${CONTAINER_NAME}` as the hostname (e.g. `postgres18:5432`).
+`postgres` (the container hostname) or the published port on the host.

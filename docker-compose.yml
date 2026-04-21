@@ -1,11 +1,9 @@
-name: ${COMPOSE_PROJECT_NAME:-postgres}
-
 services:
   postgres:
     image: postgres:${POSTGRES_VERSION:-18-alpine}
-    container_name: ${CONTAINER_NAME:-postgres}
-    hostname: ${CONTAINER_NAME:-postgres}
-    restart: ${RESTART_POLICY:-unless-stopped}
+    container_name: postgres
+    hostname: postgres
+    restart: unless-stopped
     stop_grace_period: ${STOP_GRACE_PERIOD:-1m}
     shm_size: ${SHM_SIZE:-256mb}
 
@@ -21,24 +19,10 @@ services:
       PGTZ: ${TZ:-UTC}
 
     volumes:
-      - postgres_data:${POSTGRES_DATA_TARGET:-/var/lib/postgresql}
+      - postgres_data:/var/lib/postgresql
       - ${POSTGRES_LOGS_DIR:-./logs}:/var/log/postgresql
-      - ${POSTGRES_CONFIG_FILE:-./custom.conf}:/etc/postgresql/postgresql.conf:ro
 
-    command:
-      - postgres
-      - -c
-      - config_file=/etc/postgresql/postgresql.conf
-      - -c
-      - logging_collector=on
-      - -c
-      - log_directory=/var/log/postgresql
-      - -c
-      - log_filename=postgresql-%Y-%m-%d.log
-      - -c
-      - log_rotation_age=1d
-      - -c
-      - log_rotation_size=0
+    command: postgres ${POSTGRES_COMMAND:-}
 
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
