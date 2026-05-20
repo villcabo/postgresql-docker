@@ -1,5 +1,7 @@
 # PostgreSQL Docker
 
+*Read this in [Español](README.es.md).*
+
 Parameterized PostgreSQL stack. Network and data volume are **external** —
 you create them manually — so you keep full control over MTU, driver
 options, labels, backups, and migrations.
@@ -38,30 +40,51 @@ options, labels, backups, and migrations.
 ├── docker-compose.yml   # Parameterized stack (single service)
 ├── .env.example         # Template — copy to .env
 ├── .env                 # Your local config (gitignored)
+├── scripts/             # Helper scripts (env-sync, pgtune-apply)
 ├── logs/                # PG log files (created on first run, only if enabled)
 └── README.md
 ```
 
 ## Quick start
 
-```bash
-# 1. Copy env template (everything commented — defaults kick in)
-cp .env.example .env
+End-to-end from zero:
 
-# 2. Create the external network (adjust MTU to your needs)
+```bash
+# 1. Clone the repo
+git clone git@github.com:villcabo/postgresql-docker.git
+cd postgresql-docker
+
+# 2. Create your local env file (everything commented → defaults from compose)
+cp .env.example .env
+$EDITOR .env                       # uncomment what you want to override
+
+# 3. Create the external docker network (set MTU to fit your host / VPN)
 docker network create \
   --driver bridge \
-  --opt com.docker.network.driver.mtu=1450 \
+  --opt com.docker.network.driver.mtu=1500 \
   postgres_net
 
-# 3. Create the external data volume
+# 4. Create the external docker volume for data
 docker volume create postgres_data
 
-# 4. Start
+# 5. Bring the stack up
 docker compose up -d
 
-# 5. Follow logs
+# 6. Watch it boot
 docker compose logs -f postgres
+
+# 7. Sanity check
+docker compose exec postgres pg_isready -U postgres
+docker compose exec postgres psql -U postgres -c "SELECT version();"
+```
+
+Pulling new updates later:
+
+```bash
+git pull
+./scripts/env-sync.sh                      # merge any new variables into your .env
+docker compose pull                # pull the image tag pinned in .env
+docker compose up -d
 ```
 
 ## Environment variables
@@ -94,14 +117,14 @@ data mount target `/var/lib/postgresql`.
 ## Syncing `.env` with `.env.example`
 
 When `.env.example` gains new variables (pulled from upstream), run
-`./sync-env.sh` to merge them into your existing `.env` **without losing
+`./scripts/env-sync.sh` to merge them into your existing `.env` **without losing
 the values you already set**.
 
 ```bash
-./sync-env.sh              # interactive: shows a unified diff, asks to confirm
-./sync-env.sh -n           # dry-run: shows the diff and exits, never writes
-./sync-env.sh -y           # non-interactive: apply without asking (CI / scripts)
-./sync-env.sh -y PATH_TO_EXAMPLE PATH_TO_ENV   # custom paths
+./scripts/env-sync.sh              # interactive: shows a unified diff, asks to confirm
+./scripts/env-sync.sh -n           # dry-run: shows the diff and exits, never writes
+./scripts/env-sync.sh -y           # non-interactive: apply without asking (CI / scripts)
+./scripts/env-sync.sh -y PATH_TO_EXAMPLE PATH_TO_ENV   # custom paths
 ```
 
 What it does:
@@ -213,27 +236,134 @@ A volume initialized for one layout **cannot** be reused by the other — see
 
 ## Tuning (`POSTGRES_COMMAND` + pgtune)
 
-All runtime tuning goes through `POSTGRES_COMMAND`. It's passed verbatim to
-the `postgres` binary as extra arguments.
+All runtime tuning goes through a single env var: `POSTGRES_COMMAND`. It is
+passed verbatim to the `postgres` binary as extra `-c key=value` arguments.
+This keeps everything in one place (`.env`) and avoids juggling
+`postgresql.conf` files inside the container.
 
-Generate values with [pgtune](https://pgtune.leopard.in.ua/) and paste them
-into `.env`:
+### Step 1 — Generate values with pgtune
+
+Open <https://pgtune.leopard.in.ua/> and fill the form:
+
+| Field | What to pick |
+|---|---|
+| **DB Version** | The major version you run (16, 17, 18…) |
+| **OS Type** | `Linux` |
+| **DB Type** | `OLTP` (web apps), `Data warehouses`, `Mixed`, `Desktop` |
+| **Total Memory (RAM)** | Your host RAM — or the **share you want PG to use** if the host runs other things (e.g. on a 30 GB laptop, plug in `16 GB`, not `30 GB`) |
+| **Number of CPUs** | `nproc` (threads on Linux) |
+| **Number of Connections** | Realistic concurrent connections. **Do not just bump this** to "fix" pool exhaustion — see below. |
+| **Data Storage** | `SSD` for any modern setup; `Network (SAN)` for remote storage |
+
+Click **Generate** and copy the right-hand block.
+
+### Step 2 — Save pgtune output to `pgtune.txt` and apply
+
+Save the block pgtune gave you (the right-hand panel, `key = value` lines —
+comments are fine) into a file called `pgtune.txt` at the repo root, then
+run:
 
 ```bash
-POSTGRES_COMMAND="-c max_connections=200 -c shared_buffers=2GB -c effective_cache_size=6GB -c maintenance_work_mem=512MB -c checkpoint_completion_target=0.9 -c wal_buffers=16MB -c default_statistics_target=100 -c random_page_cost=1.1 -c effective_io_concurrency=200 -c work_mem=2621kB -c huge_pages=off -c min_wal_size=1GB -c max_wal_size=4GB -c max_worker_processes=4 -c max_parallel_workers_per_gather=2 -c max_parallel_workers=4 -c max_parallel_maintenance_workers=2"
+./scripts/pgtune-apply.sh                # interactive: preview + confirm
+./scripts/pgtune-apply.sh -n             # dry-run: preview only
+./scripts/pgtune-apply.sh -y             # non-interactive (CI / scripts)
+./scripts/pgtune-apply.sh INPUT ENV      # custom paths
 ```
 
-To reload most settings without a restart:
+The script:
+
+- Parses every `key = value` line (skipping pgtune's comments / blanks).
+- Builds `POSTGRES_COMMAND="-c key=value -c …"` as a single line.
+- Computes `SHM_SIZE = shared_buffers + 500 MB` automatically (see step 3).
+- Replaces `POSTGRES_COMMAND` / `SHM_SIZE` in `.env` if present, else
+  appends them.
+- Shows a unified diff + summary, asks for `[y/N]` confirmation.
+- Writes a timestamped backup `.env.bak.YYYYMMDD-HHMMSS` before applying.
+
+If you prefer to edit `.env` by hand, the equivalent is just:
 
 ```bash
-docker compose exec postgres psql -U "$POSTGRES_USER" -c "SELECT pg_reload_conf();"
+POSTGRES_COMMAND="-c max_connections=200 -c shared_buffers=2GB …"
 ```
 
-Parameters that require a restart (`shared_buffers`, `max_connections`, …):
+Pasted as one line, quoted.
+
+> **Heads up:** pgtune sometimes emits `wal_compression=lz4` and
+> `io_method=io_uring`. These require the `postgres` binary to be built
+> with `--with-lz4` and `--with-liburing`. If your image doesn't have
+> them, edit `pgtune.txt` to remove those lines before applying, or PG
+> will refuse to start with a clear error.
+
+### Step 3 — Don't forget `SHM_SIZE`
+
+The container's `/dev/shm` must be **≥ `shared_buffers`** or PG will crash
+allocating shared memory. Add some headroom (≈ 500 MB). **The
+`pgtune-apply.sh` script in step 2 already does this for you;** the
+manual equivalent is:
 
 ```bash
-docker compose restart postgres
+# In .env, for shared_buffers=2GB:
+SHM_SIZE=2500mb
 ```
+
+### Step 4 — Apply
+
+```bash
+# max_connections, shared_buffers and SHM_SIZE require a full restart:
+docker compose down
+docker compose up -d
+```
+
+For everything else (work_mem, effective_cache_size, etc.) you can reload
+without downtime:
+
+```bash
+docker compose exec postgres psql -U postgres -c "SELECT pg_reload_conf();"
+```
+
+### Step 5 — Verify the running config
+
+Confirm PG actually picked up the values:
+
+```bash
+# Spot-check one parameter
+docker compose exec postgres psql -U postgres -c "SHOW max_connections;"
+
+# Full table of the parameters pgtune touches
+docker compose exec postgres psql -U postgres -c "
+  SELECT name, setting, unit
+  FROM pg_settings
+  WHERE name IN (
+    'max_connections','shared_buffers','effective_cache_size',
+    'maintenance_work_mem','work_mem','wal_buffers',
+    'min_wal_size','max_wal_size','checkpoint_completion_target',
+    'random_page_cost','effective_io_concurrency','default_statistics_target',
+    'max_worker_processes','max_parallel_workers',
+    'max_parallel_workers_per_gather','max_parallel_maintenance_workers',
+    'huge_pages'
+  )
+  ORDER BY name;"
+
+# Current connection usage (sanity-check before raising max_connections)
+docker compose exec postgres psql -U postgres -c "
+  SELECT state, count(*) FROM pg_stat_activity GROUP BY state ORDER BY 2 DESC;"
+```
+
+### A note on `max_connections`
+
+If you're hitting the connection cap, **the answer is almost never just a
+bigger number**. Each connection is its own backend process (~10 MB
+baseline + work_mem in queries). Raising the cap eats RAM linearly.
+
+Symptoms of a client-side leak rather than a real capacity problem:
+
+```sql
+-- Many sessions stuck in 'idle in transaction' or 'idle' = pool leak
+SELECT state, count(*) FROM pg_stat_activity GROUP BY state;
+```
+
+The proper fix is a **transaction-mode pooler in front of PG** (pgbouncer,
+pgcat). 50 real PG connections can serve thousands of app-side ones.
 
 ## Logs
 
